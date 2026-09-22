@@ -1,0 +1,9 @@
+# The only runtime dependency is a YAML parser for the robot model. Robot
+# descriptions are YAML by convention across the ROS ecosystem, and hand-rolling
+# a parser to avoid one small dependency would be a worse trade than taking it.
+# Everything else -- the event bus, the state machine, the virtual clock -- is
+# standard library, so the test suite runs in ~0.3s anywhere.
+PyYAML==6.0.3
+
+# Development only:
+pytest==8.4.2

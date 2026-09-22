@@ -1,0 +1,7 @@
+# Optional extras for the real webcam detector
+# (robot_runtime/perception/detectors/yolo.py).
+#
+# Nothing in the core imports these; the simulated detectors satisfy the same
+# PersonDetector protocol, so the demo and tests run without them.
+ultralytics==8.3.40
+opencv-python==4.10.0.84

@@ -1,0 +1,55 @@
+# A simplified stand-in for a URDF.
+#
+# It carries the three things the safety gate needs and nothing else: what the
+# joints are called, how far each one may travel, and which limb it belongs to.
+# A real deployment would parse the actual URDF and take the limits from the
+# <limit> tags rather than restating them here.
+#
+# Angles are radians.
+
+robot: demo_interactive_robot
+
+limbs:
+  # `voice` has no joints. It is listed as a limb anyway because it is an
+  # exclusive resource -- the robot cannot say two things at once -- and giving
+  # it the same arbitration machinery avoids a special case in the gate.
+  voice:
+    joints: []
+  head:
+    joints: [head_yaw, head_pitch]
+  torso:
+    joints: [torso_pitch]
+  left_arm:
+    joints: [left_shoulder_pitch, left_shoulder_roll, left_elbow]
+  right_arm:
+    joints: [right_shoulder_pitch, right_shoulder_roll, right_elbow]
+
+joints:
+  head_yaw: {min: -1.57, max: 1.57}
+  head_pitch: {min: -0.52, max: 0.79}
+  torso_pitch: {min: -0.35, max: 0.35}
+  left_shoulder_pitch: {min: -0.35, max: 2.10}
+  left_shoulder_roll: {min: -1.75, max: 0.26}
+  left_elbow: {min: 0.00, max: 2.35}
+  right_shoulder_pitch: {min: -0.35, max: 2.10}
+  right_shoulder_roll: {min: -0.26, max: 1.75}
+  right_elbow: {min: 0.00, max: 2.35}
+
+# Placeholder for self-collision checking. Each box names a joint combination
+# that is known to put the robot into itself; a target pose lands in the box
+# only if every listed joint is inside every listed interval.
+#
+# This is an approximation of a real check, not a cheap version of one: it
+# reasons about the goal pose only, knows nothing about the path taken to reach
+# it, and was written by hand rather than derived from geometry. See the README
+# for what replaces it.
+self_collision:
+  forbidden_boxes:
+    - name: right_hand_into_torso
+      joints:
+        right_shoulder_roll: [-0.26, 0.10]
+        right_elbow: [2.00, 2.35]
+    - name: left_hand_into_torso
+      joints:
+        left_shoulder_roll: [-0.10, 0.26]
+        left_elbow: [2.00, 2.35]
