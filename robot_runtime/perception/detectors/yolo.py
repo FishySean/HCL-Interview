@@ -56,13 +56,34 @@ class YoloPersonDetector:
         self._imgsz = imgsz
         self._model = YOLO(model_name)
         self._capture = cv2.VideoCapture(source)
+        self._latest = None
         if not self._capture.isOpened():  # pragma: no cover - depends on hardware
             raise RuntimeError(f"could not open video source {source!r}")
+
+    def latest_frame_jpeg(self, quality: int = 70, max_width: int = 640) -> bytes | None:
+        """Satisfies `FrameSource`, which is what lets a policy see the person.
+
+        Downscaled and JPEG-compressed here rather than at the consumer: the
+        frame crosses a queue and goes into an HTTP request body, and neither
+        of those wants a raw camera buffer.
+        """
+        if self._latest is None:  # pragma: no cover - depends on hardware
+            return None
+        frame = self._latest
+        height, width = frame.shape[:2]
+        if width > max_width:
+            scale = max_width / width
+            frame = self._cv2.resize(frame, (max_width, int(height * scale)))
+        ok, buffer = self._cv2.imencode(
+            ".jpg", frame, [int(self._cv2.IMWRITE_JPEG_QUALITY), quality]
+        )
+        return bytes(buffer) if ok else None
 
     async def detect(self) -> PersonObservation:
         ok, frame = self._capture.read()
         if not ok:  # pragma: no cover - depends on hardware
             return PersonObservation(present=False, source=self.name)
+        self._latest = frame
 
         results = self._model.track(
             frame,

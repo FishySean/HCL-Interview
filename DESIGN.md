@@ -209,6 +209,13 @@ trustworthiness.
    - **A deadline.** A decision that arrives late is wrong even if it is
      correct. `DeadlineArbiter` races the policy against the clock.
 
+   Both constraints live in the arbiter rather than in any policy, which is why
+   `behavior/vlm/RealVLMPolicy` — a hosted vision-language model reached over
+   HTTPS, optionally with a camera frame attached — could be added without
+   changing the protocol, the deadline, the validation, or the fallback. It is
+   a fourth implementation of a two-method interface. The worst a bad model can
+   do is make the robot boring.
+
 **On the hierarchical output idea.** I agree with the two-level split, and I
 put the boundary here: the policy chooses a **primitive name plus parameters**
 (`wave(hand=right, amplitude=0.8, speed=1.0)`) and never a joint trajectory.

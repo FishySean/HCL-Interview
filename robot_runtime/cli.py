@@ -4,6 +4,7 @@
     python -m robot_runtime.cli --mode manual      # type p / l / q
     python -m robot_runtime.cli --motion-failure-rate 0.5
     python -m robot_runtime.cli --mode camera      # needs requirements-camera.txt
+    python -m robot_runtime.cli --vlm real         # needs VLM_API_KEY
 """
 
 from __future__ import annotations
@@ -36,10 +37,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--motion-failure-rate", type=float, default=0.0)
     parser.add_argument("--motion-slow-rate", type=float, default=0.0)
     parser.add_argument("--sensor-noise", type=float, default=0.02, help="flicker rate (scripted mode)")
-    parser.add_argument("--vlm-latency", type=float, default=0.12)
-    parser.add_argument("--vlm-invalid-rate", type=float, default=0.0)
-    parser.add_argument("--vlm-error-rate", type=float, default=0.0)
-    parser.add_argument("--decision-deadline", type=float, default=0.25)
+    parser.add_argument(
+        "--vlm",
+        choices=("fake", "real"),
+        default="fake",
+        help="'real' calls a hosted model; needs VLM_API_KEY, falls back to 'fake' without it",
+    )
+    parser.add_argument("--vlm-latency", type=float, default=0.12, help="simulated latency (fake)")
+    parser.add_argument("--vlm-invalid-rate", type=float, default=0.0, help="fake mode only")
+    parser.add_argument("--vlm-error-rate", type=float, default=0.0, help="fake mode only")
+    parser.add_argument("--vlm-timeout", type=float, default=2.0, help="HTTP timeout (real)")
+    parser.add_argument(
+        "--decision-deadline",
+        type=float,
+        default=None,
+        help="seconds; defaults to 0.25 with the fake policy and 1.5 with a real one",
+    )
     parser.add_argument("--no-vlm", action="store_true", help="use the deterministic rule policy only")
     parser.add_argument("--trace-file", type=str, default=None, help="write JSONL traces here")
     parser.add_argument("--robot-config", type=str, default=None, help="path to the robot model YAML")
@@ -49,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def _run(args: argparse.Namespace) -> int:
     clock = RealClock()
+    # A hosted model needs a budget a network round trip can actually fit in.
+    # The *mechanism* is unchanged -- the arbiter still enforces the deadline and
+    # still falls back when it is missed; only the number differs, and it stays
+    # small enough that a person would not notice the robot hesitating.
+    deadline = args.decision_deadline
+    if deadline is None:
+        deadline = 1.5 if args.vlm == "real" else 0.25
+
     config = AppConfig(
         fps=args.fps,
         presence=PresenceConfig(enter_frames=3, exit_frames=15),
@@ -56,10 +77,12 @@ async def _run(args: argparse.Namespace) -> int:
         motion_failure_rate=args.motion_failure_rate,
         motion_slow_rate=args.motion_slow_rate,
         use_vlm=not args.no_vlm,
+        vlm_policy=args.vlm,
         vlm_latency_s=args.vlm_latency,
         vlm_invalid_rate=args.vlm_invalid_rate,
         vlm_error_rate=args.vlm_error_rate,
-        decision_deadline_s=args.decision_deadline,
+        vlm_timeout_s=args.vlm_timeout,
+        decision_deadline_s=deadline,
         seed=args.seed,
     )
 

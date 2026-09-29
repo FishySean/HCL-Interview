@@ -69,6 +69,23 @@ class PersonLeft(PerceptionEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class CameraFrame(Event):
+    """A compressed keyframe for the slow, deliberative tier.
+
+    Deliberately *not* a `PerceptionEvent`: it is context for a decision, never
+    a trigger for one, and nothing in the system is allowed to act because a
+    frame arrived. It is published at a low rate rather than per detection
+    frame -- this exists so a policy can look at the person, not so the bus
+    carries video.
+    """
+
+    jpeg: bytes
+    width: int = 0
+    height: int = 0
+    source: str = "unknown"
+
+
+@dataclass(frozen=True, kw_only=True)
 class SceneContext(PerceptionEvent):
     """Output of the slow perception tier (VLM). Enriches decisions but is never
     required for correctness: the robot behaves properly if this never arrives."""

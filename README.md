@@ -12,7 +12,7 @@ describes the architecture as built, how to run it, and how to extend it.
 ```bash
 pip install -r requirements.txt         # PyYAML (robot model) + pytest
 python3 -m robot_runtime.cli            # scripted visit, ~22s
-python3 -m pytest tests/ -q             # 77 tests, ~0.3s
+python3 -m pytest tests/ -q             # 96 tests, ~0.5s
 ```
 
 ```
@@ -55,6 +55,7 @@ python3 -m robot_runtime.cli --mode manual          # drive it yourself: p / l /
 python3 -m robot_runtime.cli --motion-failure-rate 0.4 --motion-slow-rate 0.3
 python3 -m robot_runtime.cli --vlm-invalid-rate 0.5 --vlm-error-rate 0.3
 python3 -m robot_runtime.cli --no-vlm               # deterministic rule policy only
+python3 -m robot_runtime.cli --vlm real             # real hosted model; needs VLM_API_KEY
 python3 -m robot_runtime.cli --trace-file trace.jsonl
 python3 -m robot_runtime.cli --robot-config my_robot.yaml
 python3 -m robot_runtime.cli --mode camera          # pip install -r requirements-camera.txt
@@ -192,6 +193,61 @@ surfacing as a denial halfway through a greeting.
   (injectable latency, hallucination, and failure), and `DeadlineArbiter`,
   which races the policy against the clock and **validates that the answer is a
   registered behavior name**. A model can be wrong here; it cannot be dangerous.
+- **`vlm/`** — a real hosted vision-language model behind the same `Policy`
+  protocol. See below.
+
+#### Using a real vision-language model
+
+```bash
+export VLM_PROVIDER=gemini          # gemini | openai | anthropic  (default: gemini)
+export VLM_API_KEY=...              # required; read from the environment, never committed
+export VLM_MODEL=gemini-2.0-flash   # optional, defaults per provider
+
+python3 -m robot_runtime.cli --vlm real
+python3 -m robot_runtime.cli --vlm real --mode camera   # sends a frame with each decision
+```
+
+`RealVLMPolicy` is an *addition*, not a replacement. It implements the same
+`Policy` protocol as the fake one, so the deadline, the validation, and the
+fallback are all the existing code, unmodified. It does three things: build a
+prompt from the robot's state and the candidate behaviors the registry
+produced; call the model; refuse anything that is not one of those candidates.
+
+Illegal answers are made unlikely *and* harmless. The request carries a JSON
+schema whose `behavior` field is an enum of exactly the candidate ids, so a
+schema-respecting model structurally cannot name an action the robot does not
+have — and the policy checks the answer anyway, because a schema is a request
+and this is the last thing between a language model and a motor.
+
+| | `--vlm fake` (default) | `--vlm real` |
+|---|---|---|
+| Decision source | seeded heuristic | hosted model over HTTPS |
+| Latency | injectable, virtual | real network, ~0.3–1.5 s |
+| Default deadline | 0.25 s | 1.5 s (a round trip has to fit) |
+| Camera frame | ignored | attached when fresh (< 3 s) |
+| Determinism | total | none |
+| Needs a key | no | yes, or it falls back |
+
+Without `VLM_API_KEY` the app prints the three exports it wants and runs on the
+fake policy. A missing credential is a deployment mistake, not a reason for a
+robot to refuse to boot.
+
+Dependencies: none. Every vendor here speaks JSON over HTTPS, so
+`behavior/vlm/transport.py` uses `urllib` and runs it in a worker thread. An
+SDK would have added a dependency tree to save about twenty lines.
+
+Gemini is implemented. `OpenAIProvider` and `AnthropicProvider` exist as seams
+and raise `NotImplementedError` with a note on which structured-output feature
+each would use (`response_format: json_schema`, and a forced tool with an
+`input_schema`, respectively).
+
+**No test in this repository calls a real model.** A unit test that needs an
+API key and the internet is slow, costs money, fails for reasons unrelated to
+this code, and — against a non-deterministic model — cannot assert much anyway.
+`tests/test_vlm_policy.py` stubs the HTTP transport instead and pins down
+everything between the socket and the robot: the schema we send, the frame we
+attach, the answers we reject, and the fact that a hallucinated behavior, a
+slow response, and an unreachable API all end at `RulePolicy`.
 
 ### Motion
 
@@ -277,7 +333,7 @@ registers both from outside the package and asserts they run.
 
 ## Tests
 
-77 tests, ~0.3 s.
+96 tests, ~0.5 s. None of them touch a network.
 
 Every test runs on `FakeClock`, a virtual clock driven by explicit `advance`
 calls. A 750 ms presence timeout or a 10 000 s motion hang costs no wall-clock
@@ -291,6 +347,7 @@ time and cannot flake on a loaded CI machine. A 5-second real-time guard in
 | `test_safety_gate.py` | Joint limits (including following the `hand` parameter), self-collision, unknown primitives, missing parameters; and on arbitration: a lower- or equal-priority motion cannot take a busy limb, a higher one can and names its victim, multi-limb acquisition is all-or-nothing, and a preempted motion cannot release its successor's limb. |
 | `test_motion_executor.py` | Timeout, failure→fallback, fallbacks being re-screened, preemption, rejection, concurrent limbs, limb release after every outcome. |
 | `test_policy.py` | Late answers, hallucinated actions, and crashes each degrade to the deterministic policy. |
+| `test_vlm_policy.py` | The real policy with the HTTP transport stubbed: the schema pins the answer to the registered behaviors, a fresh frame is attached and a stale one is not, the credential stays out of urls and payloads, and a hallucination, a slow response, and an unreachable API all end at `RulePolicy`. |
 | `test_architecture.py` | No layer imports another layer; `contracts` imports nothing; only the composition root knows all five; the motion layer cannot subscribe to unapproved commands. |
 | `test_end_to_end.py` | Wake/greet/wave then idle; no double greeting after occlusion; reflex precedes the decision; a failing wave degrades to a nod; departure preempts a gesture; a misparameterised behavior is stopped by the gate rather than by the hardware; one trace id spans the whole pipeline; new behaviors and motions plug in. |
 

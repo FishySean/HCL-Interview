@@ -3,6 +3,7 @@ from .events import (
     ApprovedMotion,
     BehaviorFinished,
     BehaviorSelected,
+    CameraFrame,
     Event,
     MotionCommand,
     MotionDenied,
@@ -17,13 +18,15 @@ from .events import (
     StateChanged,
     new_id,
 )
-from .protocols import Clock, MotionBackend, PersonDetector, Policy, Tracer
+from .protocols import Clock, FrameSource, MotionBackend, PersonDetector, Policy, Tracer
 
 __all__ = [
     "ApprovedMotion",
     "BehaviorFinished",
     "BehaviorSelected",
+    "CameraFrame",
     "Clock",
+    "FrameSource",
     "DenialReason",
     "Event",
     "MotionBackend",

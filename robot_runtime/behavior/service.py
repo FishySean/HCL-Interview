@@ -18,12 +18,13 @@ that cannot get stuck in GREETING because a wave never finished.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Sequence
 
 from ..contracts.enums import MotionStatus, RobotState
 from ..contracts.events import (
     BehaviorFinished,
     BehaviorSelected,
+    CameraFrame,
     Event,
     MotionCommand,
     MotionResult,
@@ -62,12 +63,13 @@ class BehaviorService:
 
         self._fsm = RobotStateMachine()
         self._subscription = bus.subscribe(
-            PerceptionEvent, MotionResult, BehaviorFinished, name="behavior"
+            PerceptionEvent, MotionResult, BehaviorFinished, CameraFrame, name="behavior"
         )
         self._inbox: asyncio.Queue[Event] = asyncio.Queue(maxsize=64)
         self._pending: dict[str, asyncio.Future[MotionResult]] = {}
         self._memory: dict[str, Any] = {}
         self._scene: SceneContext | None = None
+        self._frame: CameraFrame | None = None
         self._present = False
 
         self._plan_task: asyncio.Task[None] | None = None
@@ -117,6 +119,10 @@ class BehaviorService:
             elif isinstance(event, SceneContext):
                 self._scene = event
                 continue
+            elif isinstance(event, CameraFrame):
+                # Context for the next decision, never a trigger for one.
+                self._frame = event
+                continue
             try:
                 self._inbox.put_nowait(event)
             except asyncio.QueueFull:
@@ -153,7 +159,9 @@ class BehaviorService:
             await self._cancel_plan(f"preempted by {candidates[0].name}")
 
         names = tuple(behavior.name for behavior in candidates)
-        decision = await self._arbiter.choose(names, self._policy_context(context), event.trace_id)
+        decision = await self._arbiter.choose(
+            names, self._policy_context(context, candidates), event.trace_id
+        )
         behavior = self._registry.get(decision.behavior)
         if behavior is None:  # defence in depth; the arbiter already validated
             self._tracer.record("behavior.unknown", event.trace_id, behavior=decision.behavior)
@@ -287,7 +295,17 @@ class BehaviorService:
             memory=self._memory,
         )
 
-    def _policy_context(self, context: BehaviorContext) -> dict[str, Any]:
+    def _policy_context(
+        self, context: BehaviorContext, candidates: Sequence[Behavior] = ()
+    ) -> dict[str, Any]:
+        """Everything a policy is allowed to reason over.
+
+        A plain mapping rather than a typed object, because the `Policy`
+        protocol takes a `Mapping` -- which is what lets a vision model receive
+        a camera frame without the protocol, the arbiter, or any existing
+        policy changing at all. Policies that do not care simply ignore keys
+        they do not know.
+        """
         event = context.event
         returning = False
         if isinstance(event, PersonAppeared) and event.track_id is not None:
@@ -298,6 +316,9 @@ class BehaviorService:
             "person_present": context.person_present,
             "returning_visitor": returning,
             "scene": context.scene.description if context.scene else "",
+            "candidates": {behavior.name: behavior.description for behavior in candidates},
+            "frame_jpeg": self._frame.jpeg if self._frame else None,
+            "frame_age_s": (self._clock.now() - self._frame.timestamp) if self._frame else None,
         }
 
     def _announce(

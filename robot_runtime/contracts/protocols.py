@@ -30,6 +30,19 @@ class PersonDetector(Protocol):
 
 
 @runtime_checkable
+class FrameSource(Protocol):
+    """Optional capability of a detector: hand out the latest frame as JPEG.
+
+    Optional on purpose. The simulated detectors have no image to give, and the
+    robot must behave correctly without one, so anything that wants a picture
+    asks for it and copes with `None`. `isinstance` against this protocol is
+    how the perception loop decides whether there is anything to publish.
+    """
+
+    def latest_frame_jpeg(self) -> bytes | None: ...
+
+
+@runtime_checkable
 class MotionBackend(Protocol):
     """The hardware seam. `run` must either return normally on success or raise
     MotionFailure; it must be cancellable at any await point."""

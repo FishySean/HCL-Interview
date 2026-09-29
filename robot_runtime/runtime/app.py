@@ -24,6 +24,7 @@ from ..behavior.behaviors import register_builtins
 from ..behavior.policies import DeadlineArbiter, MockVLMPolicy, RulePolicy
 from ..behavior.registry import BehaviorRegistry
 from ..behavior.service import BehaviorService
+from ..behavior.vlm import RealVLMPolicy, VLMConfig, VLMConfigError
 from ..contracts.enums import RobotState
 from ..contracts.events import (
     BehaviorSelected,
@@ -33,7 +34,7 @@ from ..contracts.events import (
     StateChanged,
 )
 from ..contracts.primitives import PrimitiveRegistry, default_registry
-from ..contracts.protocols import Clock, PersonDetector
+from ..contracts.protocols import Clock, PersonDetector, Policy
 from ..motion.backends.simulated import SimulatedBackend
 from ..motion.executor import MotionExecutor
 from ..motion.service import MotionService
@@ -52,14 +53,19 @@ from .tracing import Tracer
 @dataclass
 class AppConfig:
     fps: float = 20.0
+    frame_hz: float = 1.0
     presence: PresenceConfig = field(default_factory=PresenceConfig)
     robot_config: Path | str | None = None
     motion_failure_rate: float = 0.0
     motion_slow_rate: float = 0.0
     use_vlm: bool = True
+    # "fake" is the default everywhere, including tests: a hosted model is a
+    # network dependency, and the robot's logic must be reproducible without one.
+    vlm_policy: str = "fake"
     vlm_latency_s: float = 0.12
     vlm_invalid_rate: float = 0.0
     vlm_error_rate: float = 0.0
+    vlm_timeout_s: float = 2.0
     decision_deadline_s: float = 0.25
     seed: int = 7
     verbose: bool = True
@@ -112,20 +118,9 @@ class RobotApp:
         self.motion = MotionService(self.executor, self.bus, self.tracer)
 
         # ---------------------------------------------------------- behavior
-        primary = (
-            MockVLMPolicy(
-                clock=self.clock,
-                latency_s=self.config.vlm_latency_s,
-                invalid_rate=self.config.vlm_invalid_rate,
-                error_rate=self.config.vlm_error_rate,
-                seed=self.config.seed,
-            )
-            if self.config.use_vlm
-            else RulePolicy()
-        )
-        self.policy = primary
+        self.policy = self._build_policy()
         self.arbiter = DeadlineArbiter(
-            primary=primary,
+            primary=self.policy,
             fallback=RulePolicy(),
             clock=self.clock,
             tracer=self.tracer,
@@ -149,9 +144,44 @@ class RobotApp:
             clock=self.clock,
             tracer=self.tracer,
             fps=self.config.fps,
+            frame_hz=self.config.frame_hz,
         )
 
         self._console_task: asyncio.Task[None] | None = None
+
+    def _build_policy(self) -> Policy:
+        """Pick the deliberative policy, and never let that choice stop the robot.
+
+        A missing credential is a deployment mistake, not a reason for a robot
+        to refuse to boot. It degrades to the simulated policy and says so, in
+        exactly the same way a slow or wrong model degrades to `RulePolicy` at
+        runtime: the interesting policy is always optional.
+        """
+        if not self.config.use_vlm:
+            return RulePolicy()
+
+        if self.config.vlm_policy == "real":
+            try:
+                vlm_config = VLMConfig.from_env(timeout_s=self.config.vlm_timeout_s)
+                policy = RealVLMPolicy(vlm_config, tracer=self.tracer)
+            except (VLMConfigError, NotImplementedError) as exc:
+                self._sink(f"\n[vlm] {exc}")
+                self._sink("[vlm] Falling back to the simulated policy for this run.\n")
+            else:
+                self._sink(
+                    f"\n[vlm] Using {vlm_config.provider}/{vlm_config.model} "
+                    f"(deadline {self.config.decision_deadline_s:g}s, "
+                    f"timeout {vlm_config.timeout_s:g}s)\n"
+                )
+                return policy
+
+        return MockVLMPolicy(
+            clock=self.clock,
+            latency_s=self.config.vlm_latency_s,
+            invalid_rate=self.config.vlm_invalid_rate,
+            error_rate=self.config.vlm_error_rate,
+            seed=self.config.seed,
+        )
 
     @property
     def state(self) -> RobotState:
